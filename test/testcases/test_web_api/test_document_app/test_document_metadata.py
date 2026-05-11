@@ -478,31 +478,31 @@ class TestDocumentMetadataUnit:
         async def fake_make_response(data):
             return _ImageResponse(data)
 
-        accessible_calls = []
-
-        def fake_accessible_denied(doc_id, user_id):
-            accessible_calls.append((doc_id, user_id))
-            return False
-
-        monkeypatch.setattr(module.DocumentService, "accessible", fake_accessible_denied)
-        res = _run(module.get_document_thumbnail("doc-1"))
-        assert res["code"] == RetCode.DATA_ERROR
-        assert "Document not found!" in res["message"]
-        assert accessible_calls == [("doc-1", "user-1")]
-
-        monkeypatch.setattr(module.DocumentService, "accessible", lambda _doc_id, _user_id: True)
+        kb_accessible_calls = []
         monkeypatch.setattr(
             module.DocumentService,
             "get_by_id",
             lambda _doc_id: (True, SimpleNamespace(kb_id="kb-1", thumbnail="thumbnail_doc-1.png")),
         )
+        def fake_kb_accessible_denied(kb_id, user_id):
+            kb_accessible_calls.append((kb_id, user_id))
+            return False
+
+        monkeypatch.setattr(module.KnowledgebaseService, "accessible", fake_kb_accessible_denied)
+        res = _run(module.get_document_thumbnail("doc-1"))
+        assert res["code"] == RetCode.DATA_ERROR
+        assert "Document not found!" in res["message"]
+        assert kb_accessible_calls == [("kb-1", "user-1")]
+
+        monkeypatch.setattr(module.KnowledgebaseService, "accessible", lambda _kb_id, _user_id: True)
         monkeypatch.setattr(module, "thread_pool_exec", fake_thread_pool_exec)
         monkeypatch.setattr(module, "make_response", fake_make_response)
         monkeypatch.setattr(module.settings, "STORAGE_IMPL", SimpleNamespace(get=lambda *_args, **_kwargs: b"image-bytes"))
         res = _run(module.get_document_thumbnail("doc-1"))
         assert isinstance(res, _ImageResponse)
         assert res.data == b"image-bytes"
-        assert res.headers["Content-Type"] == "image/png"
+        assert res.headers["content_type"] == "image/png"
+        assert res.headers["extension"] == "png"
 
         async def raise_error(*_args, **_kwargs):
             raise RuntimeError("image boom")
@@ -532,7 +532,7 @@ class TestDocumentMetadataUnit:
             return _ImageResponse(data)
 
         monkeypatch.setattr(module, "_get_accessible_chunk_image_doc_id", lambda _image_id: None)
-        res = _run(module.get_document_image("bucket-name"))
+        res = _run(module.get_document_image("bucket-name.jpg"))
         assert res["code"] == RetCode.DATA_ERROR
         assert "Image not found." in res["message"]
 
@@ -540,17 +540,18 @@ class TestDocumentMetadataUnit:
         monkeypatch.setattr(module, "thread_pool_exec", fake_thread_pool_exec)
         monkeypatch.setattr(module, "make_response", fake_make_response)
         monkeypatch.setattr(module.settings, "STORAGE_IMPL", SimpleNamespace(get=lambda *_args, **_kwargs: b"image-bytes"))
-        res = _run(module.get_document_image("bucket-name"))
+        res = _run(module.get_document_image("bucket-name.jpg"))
         assert isinstance(res, _ImageResponse)
         assert res.data == b"image-bytes"
-        assert res.headers["Content-Type"] == "image/jpeg"
+        assert res.headers["content_type"] == "image/jpeg"
+        assert res.headers["extension"] == "jpg"
 
         async def raise_error(*_args, **_kwargs):
             raise RuntimeError("image boom")
 
         monkeypatch.setattr(module, "thread_pool_exec", raise_error)
         monkeypatch.setattr(module, "server_error_response", lambda e: {"code": 500, "message": str(e)})
-        res = _run(module.get_document_image("bucket-name"))
+        res = _run(module.get_document_image("bucket-name.jpg"))
         assert res["code"] == 500
         assert "image boom" in res["message"]
 
