@@ -85,6 +85,25 @@ def document_app_module(monkeypatch):
     common_pkg.__path__ = [str(repo_root / "common")]
     monkeypatch.setitem(sys.modules, "common", common_pkg)
 
+    common_settings_mod = ModuleType("common.settings")
+    common_settings_mod.STORAGE_IMPL = SimpleNamespace(get=lambda *_args, **_kwargs: b"", obj_exist=lambda *_args, **_kwargs: False)
+    common_settings_mod.docStoreConn = SimpleNamespace(
+        index_exist=lambda *_args, **_kwargs: False,
+        search=lambda *_args, **_kwargs: {},
+        get_fields=lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setitem(sys.modules, "common.settings", common_settings_mod)
+
+    metadata_utils_mod = ModuleType("common.metadata_utils")
+    metadata_utils_mod.convert_conditions = lambda *_args, **_kwargs: {}
+    metadata_utils_mod.meta_filter = lambda *_args, **_kwargs: True
+    metadata_utils_mod.turn2jsonschema = lambda value: value
+    monkeypatch.setitem(sys.modules, "common.metadata_utils", metadata_utils_mod)
+
+    rag_nlp_mod = ModuleType("rag.nlp")
+    rag_nlp_mod.search = SimpleNamespace(index_name=lambda tenant_id: f"ragflow_{tenant_id}")
+    monkeypatch.setitem(sys.modules, "rag.nlp", rag_nlp_mod)
+
     deepdoc_pkg = ModuleType("deepdoc")
     deepdoc_parser_pkg = ModuleType("deepdoc.parser")
     deepdoc_parser_pkg.__path__ = []
@@ -149,6 +168,98 @@ def document_app_module(monkeypatch):
     document_api_service_mod.update_document_status_only = lambda *_args, **_kwargs: None
     document_api_service_mod.reset_document_for_reparse = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "api.apps.services.document_api_service", document_api_service_mod)
+
+    db_models_mod = ModuleType("api.db.db_models")
+    db_models_mod.Task = type("Task", (), {})
+    monkeypatch.setitem(sys.modules, "api.db.db_models", db_models_mod)
+
+    doc_metadata_service_mod = ModuleType("api.db.services.doc_metadata_service")
+    doc_metadata_service_mod.DocMetadataService = SimpleNamespace(get_metadata_for_documents=lambda *_args, **_kwargs: {})
+    monkeypatch.setitem(sys.modules, "api.db.services.doc_metadata_service", doc_metadata_service_mod)
+
+    document_service_mod = ModuleType("api.db.services.document_service")
+    document_service_mod.DocumentService = SimpleNamespace(
+        query=lambda **_kwargs: [],
+        get_by_id=lambda _doc_id: (False, None),
+        accessible=lambda *_args, **_kwargs: False,
+        get_by_kb_id=lambda *_args, **_kwargs: ([], 0),
+        get_thumbnails=lambda _doc_ids: [],
+        update_parser_config=lambda *_args, **_kwargs: None,
+        update_by_id=lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setitem(sys.modules, "api.db.services.document_service", document_service_mod)
+
+    file2document_service_mod = ModuleType("api.db.services.file2document_service")
+    file2document_service_mod.File2DocumentService = SimpleNamespace(get_storage_address=lambda **_kwargs: ("bucket", "name"))
+    monkeypatch.setitem(sys.modules, "api.db.services.file2document_service", file2document_service_mod)
+
+    file_service_mod = ModuleType("api.db.services.file_service")
+    file_service_mod.FileService = SimpleNamespace(get_by_id=lambda *_args, **_kwargs: (False, None))
+    monkeypatch.setitem(sys.modules, "api.db.services.file_service", file_service_mod)
+
+    knowledgebase_service_mod = ModuleType("api.db.services.knowledgebase_service")
+    knowledgebase_service_mod.KnowledgebaseService = SimpleNamespace(
+        query=lambda **_kwargs: [],
+        get_by_tenant_ids=lambda *_args, **_kwargs: ([], 0),
+        get_by_id=lambda _dataset_id: (False, None),
+        accessible=lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setitem(sys.modules, "api.db.services.knowledgebase_service", knowledgebase_service_mod)
+
+    task_service_mod = ModuleType("api.db.services.task_service")
+    task_service_mod.TaskService = SimpleNamespace(query=lambda **_kwargs: [])
+    task_service_mod.cancel_all_task_of = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "api.db.services.task_service", task_service_mod)
+
+    check_team_permission_mod = ModuleType("api.common.check_team_permission")
+    check_team_permission_mod.check_kb_team_permission = lambda *_args, **_kwargs: True
+    monkeypatch.setitem(sys.modules, "api.common.check_team_permission", check_team_permission_mod)
+
+    api_utils_mod = ModuleType("api.utils.api_utils")
+
+    async def _default_request_json():
+        return {}
+
+    def _ok_result(*, data=None, message="success", code=0):
+        return {"code": code, "message": message, "data": data}
+
+    def _error_result(*, message="Sorry! Data missing!", code=102):
+        return {"code": code, "message": message}
+
+    def _server_error_response(error):
+        return {"code": 500, "message": str(error)}
+
+    def _pass_through_decorator(func):
+        return func
+
+    api_utils_mod.get_request_json = _default_request_json
+    api_utils_mod.get_data_error_result = _error_result
+    api_utils_mod.get_error_data_result = _error_result
+    api_utils_mod.get_result = _ok_result
+    api_utils_mod.get_json_result = _ok_result
+    api_utils_mod.server_error_response = _server_error_response
+    api_utils_mod.add_tenant_id_to_kwargs = lambda func: func
+    api_utils_mod.get_error_argument_result = _error_result
+    api_utils_mod.check_duplicate_ids = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "api.utils.api_utils", api_utils_mod)
+
+    file_utils_mod = ModuleType("api.utils.file_utils")
+    file_utils_mod.filename_type = lambda *_args, **_kwargs: "txt"
+    file_utils_mod.thumbnail = lambda *_args, **_kwargs: ""
+    monkeypatch.setitem(sys.modules, "api.utils.file_utils", file_utils_mod)
+
+    web_utils_mod = ModuleType("api.utils.web_utils")
+    web_utils_mod.CONTENT_TYPE_MAP = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "txt": "text/plain"}
+    web_utils_mod.html2pdf = lambda *_args, **_kwargs: b""
+    web_utils_mod.is_valid_url = lambda *_args, **_kwargs: True
+    web_utils_mod.apply_safe_file_response_headers = lambda response, content_type, extension=None: response.headers.update({"content_type": content_type, "extension": extension})
+    monkeypatch.setitem(sys.modules, "api.utils.web_utils", web_utils_mod)
+
+    user_service_mod = ModuleType("api.db.services.user_service")
+    user_service_mod.UserService = SimpleNamespace(query=lambda **_kwargs: [])
+    user_service_mod.UserTenantService = SimpleNamespace(query=lambda **_kwargs: [])
+    user_service_mod.TenantService = SimpleNamespace(query=lambda **_kwargs: [])
+    monkeypatch.setitem(sys.modules, "api.db.services.user_service", user_service_mod)
 
     module_path = repo_root / "api" / "apps" / "restful_apis" / "document_api.py"
     spec = importlib.util.spec_from_file_location("test_document_app_unit", module_path)
@@ -165,6 +276,25 @@ def document_rest_api_module(monkeypatch):
     common_pkg.__path__ = [str(repo_root / "common")]
     monkeypatch.setitem(sys.modules, "common", common_pkg)
 
+    common_settings_mod = ModuleType("common.settings")
+    common_settings_mod.STORAGE_IMPL = SimpleNamespace(get=lambda *_args, **_kwargs: b"", obj_exist=lambda *_args, **_kwargs: False)
+    common_settings_mod.docStoreConn = SimpleNamespace(
+        index_exist=lambda *_args, **_kwargs: False,
+        search=lambda *_args, **_kwargs: {},
+        get_fields=lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setitem(sys.modules, "common.settings", common_settings_mod)
+
+    metadata_utils_mod = ModuleType("common.metadata_utils")
+    metadata_utils_mod.convert_conditions = lambda *_args, **_kwargs: {}
+    metadata_utils_mod.meta_filter = lambda *_args, **_kwargs: True
+    metadata_utils_mod.turn2jsonschema = lambda value: value
+    monkeypatch.setitem(sys.modules, "common.metadata_utils", metadata_utils_mod)
+
+    rag_nlp_mod = ModuleType("rag.nlp")
+    rag_nlp_mod.search = SimpleNamespace(index_name=lambda tenant_id: f"ragflow_{tenant_id}")
+    monkeypatch.setitem(sys.modules, "rag.nlp", rag_nlp_mod)
+
     deepdoc_pkg = ModuleType("deepdoc")
     deepdoc_parser_pkg = ModuleType("deepdoc.parser")
     deepdoc_parser_pkg.__path__ = []
@@ -228,6 +358,95 @@ def document_rest_api_module(monkeypatch):
     document_api_service_mod.update_document_status_only = lambda *_args, **_kwargs: None
     document_api_service_mod.reset_document_for_reparse = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "api.apps.services.document_api_service", document_api_service_mod)
+
+    db_models_mod = ModuleType("api.db.db_models")
+    db_models_mod.Task = type("Task", (), {})
+    monkeypatch.setitem(sys.modules, "api.db.db_models", db_models_mod)
+
+    doc_metadata_service_mod = ModuleType("api.db.services.doc_metadata_service")
+    doc_metadata_service_mod.DocMetadataService = SimpleNamespace(get_metadata_for_documents=lambda *_args, **_kwargs: {})
+    monkeypatch.setitem(sys.modules, "api.db.services.doc_metadata_service", doc_metadata_service_mod)
+
+    document_service_mod = ModuleType("api.db.services.document_service")
+    document_service_mod.DocumentService = SimpleNamespace(
+        query=lambda **_kwargs: [],
+        get_by_id=lambda _doc_id: (False, None),
+        accessible=lambda *_args, **_kwargs: False,
+        get_by_kb_id=lambda *_args, **_kwargs: ([], 0),
+        get_thumbnails=lambda _doc_ids: [],
+        update_parser_config=lambda *_args, **_kwargs: None,
+        update_by_id=lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setitem(sys.modules, "api.db.services.document_service", document_service_mod)
+
+    file2document_service_mod = ModuleType("api.db.services.file2document_service")
+    file2document_service_mod.File2DocumentService = SimpleNamespace(get_storage_address=lambda **_kwargs: ("bucket", "name"))
+    monkeypatch.setitem(sys.modules, "api.db.services.file2document_service", file2document_service_mod)
+
+    file_service_mod = ModuleType("api.db.services.file_service")
+    file_service_mod.FileService = SimpleNamespace(get_by_id=lambda *_args, **_kwargs: (False, None))
+    monkeypatch.setitem(sys.modules, "api.db.services.file_service", file_service_mod)
+
+    knowledgebase_service_mod = ModuleType("api.db.services.knowledgebase_service")
+    knowledgebase_service_mod.KnowledgebaseService = SimpleNamespace(
+        query=lambda **_kwargs: [],
+        get_by_tenant_ids=lambda *_args, **_kwargs: ([], 0),
+        get_by_id=lambda _dataset_id: (False, None),
+        accessible=lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setitem(sys.modules, "api.db.services.knowledgebase_service", knowledgebase_service_mod)
+
+    task_service_mod = ModuleType("api.db.services.task_service")
+    task_service_mod.TaskService = SimpleNamespace(query=lambda **_kwargs: [])
+    task_service_mod.cancel_all_task_of = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "api.db.services.task_service", task_service_mod)
+
+    check_team_permission_mod = ModuleType("api.common.check_team_permission")
+    check_team_permission_mod.check_kb_team_permission = lambda *_args, **_kwargs: True
+    monkeypatch.setitem(sys.modules, "api.common.check_team_permission", check_team_permission_mod)
+
+    api_utils_mod = ModuleType("api.utils.api_utils")
+
+    async def _default_request_json():
+        return {}
+
+    def _ok_result(*, data=None, message="success", code=0):
+        return {"code": code, "message": message, "data": data}
+
+    def _error_result(*, message="Sorry! Data missing!", code=102):
+        return {"code": code, "message": message}
+
+    def _server_error_response(error):
+        return {"code": 500, "message": str(error)}
+
+    api_utils_mod.get_request_json = _default_request_json
+    api_utils_mod.get_data_error_result = _error_result
+    api_utils_mod.get_error_data_result = _error_result
+    api_utils_mod.get_result = _ok_result
+    api_utils_mod.get_json_result = _ok_result
+    api_utils_mod.server_error_response = _server_error_response
+    api_utils_mod.add_tenant_id_to_kwargs = lambda func: func
+    api_utils_mod.get_error_argument_result = _error_result
+    api_utils_mod.check_duplicate_ids = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "api.utils.api_utils", api_utils_mod)
+
+    file_utils_mod = ModuleType("api.utils.file_utils")
+    file_utils_mod.filename_type = lambda *_args, **_kwargs: "txt"
+    file_utils_mod.thumbnail = lambda *_args, **_kwargs: ""
+    monkeypatch.setitem(sys.modules, "api.utils.file_utils", file_utils_mod)
+
+    web_utils_mod = ModuleType("api.utils.web_utils")
+    web_utils_mod.CONTENT_TYPE_MAP = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "txt": "text/plain"}
+    web_utils_mod.html2pdf = lambda *_args, **_kwargs: b""
+    web_utils_mod.is_valid_url = lambda *_args, **_kwargs: True
+    web_utils_mod.apply_safe_file_response_headers = lambda response, content_type, extension=None: response.headers.update({"content_type": content_type, "extension": extension})
+    monkeypatch.setitem(sys.modules, "api.utils.web_utils", web_utils_mod)
+
+    user_service_mod = ModuleType("api.db.services.user_service")
+    user_service_mod.UserService = SimpleNamespace(query=lambda **_kwargs: [])
+    user_service_mod.UserTenantService = SimpleNamespace(query=lambda **_kwargs: [])
+    user_service_mod.TenantService = SimpleNamespace(query=lambda **_kwargs: [])
+    monkeypatch.setitem(sys.modules, "api.db.services.user_service", user_service_mod)
 
     module_path = repo_root / "api" / "apps" / "restful_apis" / "document_api.py"
     spec = importlib.util.spec_from_file_location("test_document_api_unit", module_path)

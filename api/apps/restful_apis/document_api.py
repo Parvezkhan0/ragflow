@@ -36,6 +36,7 @@ from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
 from api.db.services.knowledgebase_service import KnowledgebaseService
+from api.db.services.user_service import UserTenantService
 from api.common.check_team_permission import check_kb_team_permission
 from api.db.services.task_service import TaskService, cancel_all_task_of
 from api.utils.api_utils import get_data_error_result, get_error_data_result, get_result, get_json_result, \
@@ -46,6 +47,7 @@ from api.utils.validation_utils import (
 
 from common import settings
 from common.constants import ParserType, RetCode, TaskStatus, SANDBOX_ARTIFACT_BUCKET
+from common.doc_store.doc_store_base import OrderByExpr
 from common.metadata_utils import convert_conditions, meta_filter, turn2jsonschema
 from common.misc_utils import get_uuid, thread_pool_exec
 from api.utils.file_utils import filename_type, thumbnail
@@ -733,7 +735,7 @@ def list_docs(dataset_id, tenant_id):
     renamed_doc_list = [map_doc_keys(doc) for doc in payload]
     for doc_item in renamed_doc_list:
         if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
-            doc_item["thumbnail"] = f"/api/v1/documents/images/{dataset_id}-{doc_item['thumbnail']}"
+            doc_item["thumbnail"] = _document_thumbnail_url(doc_item["id"])
         if doc_item.get("source_type"):
             doc_item["source_type"] = doc_item["source_type"].split("/")[0]
         if doc_item["parser_config"].get("metadata"):
@@ -833,6 +835,57 @@ def _get_docs_with_request(req, dataset_id:str):
         docs = [d for d in docs if (create_time_from == 0 or d.get("create_time", 0) >= create_time_from) and (create_time_to == 0 or d.get("create_time", 0) <= create_time_to)]
 
     return RetCode.SUCCESS, "", docs, total
+
+
+def _document_thumbnail_url(doc_id: str) -> str:
+    return f"/api/v1/documents/{doc_id}/thumbnail"
+
+
+def _get_accessible_chunk_image_doc_id(image_id: str) -> str | None:
+    tenants = UserTenantService.query(user_id=current_user.id)
+    if not tenants:
+        return None
+
+    accessible_kbs, _ = KnowledgebaseService.get_by_tenant_ids(
+        [tenant.tenant_id for tenant in tenants],
+        current_user.id,
+        0,
+        0,
+        "update_time",
+        True,
+        "",
+    )
+
+    kb_ids_by_tenant = {}
+    for kb in accessible_kbs:
+        kb_ids_by_tenant.setdefault(kb["tenant_id"], []).append(kb["id"])
+
+    for tenant_id, kb_ids in kb_ids_by_tenant.items():
+        index_name = search.index_name(tenant_id)
+        for kb_id in kb_ids:
+            if not settings.docStoreConn.index_exist(index_name, kb_id):
+                continue
+
+            result = settings.docStoreConn.search(
+                ["doc_id"],
+                [],
+                {"img_id": image_id},
+                [],
+                OrderByExpr(),
+                0,
+                1,
+                index_name,
+                [kb_id],
+            )
+            fields = settings.docStoreConn.get_fields(result, ["doc_id"])
+            if not fields:
+                continue
+
+            doc_id = next(iter(fields.values())).get("doc_id")
+            if doc_id and DocumentService.accessible(doc_id, current_user.id):
+                return doc_id
+
+    return None
 
 
 def _get_doc_filters_with_request(req, dataset_id: str):
@@ -1165,6 +1218,7 @@ async def update_metadata_config(tenant_id, dataset_id, document_id):
 
 
 @manager.route("/thumbnails", methods=["GET"])  # noqa: F821
+@login_required
 def list_thumbnails():
     """
     Get thumbnails for documents.
@@ -1191,11 +1245,12 @@ def list_thumbnails():
         return get_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
 
     try:
-        docs = DocumentService.get_thumbnails(doc_ids)
+        authorized_doc_ids = [doc_id for doc_id in doc_ids if DocumentService.accessible(doc_id, current_user.id)]
+        docs = DocumentService.get_thumbnails(authorized_doc_ids)
 
         for doc_item in docs:
             if doc_item["thumbnail"] and not doc_item["thumbnail"].startswith(IMG_BASE64_PREFIX):
-                doc_item["thumbnail"] = f"/api/v1/documents/images/{doc_item['kb_id']}-{doc_item['thumbnail']}"
+                doc_item["thumbnail"] = _document_thumbnail_url(doc_item["id"])
 
         return get_json_result(data={d["id"]: d["thumbnail"] for d in docs})
     except Exception as e:
@@ -1615,7 +1670,52 @@ async def stop_parse_documents(tenant_id, dataset_id):
         return get_error_data_result(message="Internal server error")
 
 
+@manager.route("/documents/<doc_id>/thumbnail", methods=["GET"])  # noqa: F821
+@login_required
+async def get_document_thumbnail(doc_id):
+    """
+    Get a document thumbnail by document ID.
+    ---
+    tags:
+      - Documents
+    security:
+      - ApiKeyAuth: []
+    parameters:
+      - name: doc_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The document ID.
+    responses:
+      200:
+        description: Thumbnail image file
+        content:
+          image/png:
+            schema:
+              type: string
+              format: binary
+    """
+    try:
+        if not DocumentService.accessible(doc_id, current_user.id):
+            logging.warning("get_document_thumbnail: access denied for doc_id=%s user_id=%s", doc_id, current_user.id)
+            return get_data_error_result(message="Document not found!")
+
+        e, doc = DocumentService.get_by_id(doc_id)
+        if not e or not doc.thumbnail or doc.thumbnail.startswith(IMG_BASE64_PREFIX):
+            return get_data_error_result(message="Image not found.")
+
+        data = await thread_pool_exec(settings.STORAGE_IMPL.get, doc.kb_id, doc.thumbnail)
+        response = await make_response(data)
+        ext = Path(doc.thumbnail).suffix.lower().lstrip(".")
+        response.headers.set("Content-Type", CONTENT_TYPE_MAP.get(ext, "image/png"))
+        return response
+    except Exception as e:
+        return server_error_response(e)
+
+
 @manager.route("/documents/images/<image_id>", methods=["GET"])  # noqa: F821
+@login_required
 async def get_document_image(image_id):
     """
     Get a document image by ID.
@@ -1639,13 +1739,20 @@ async def get_document_image(image_id):
               format: binary
     """
     try:
-        arr = image_id.split("-")
+        arr = image_id.split("-", 1)
         if len(arr) != 2:
             return get_data_error_result(message="Image not found.")
-        bkt, nm = image_id.split("-")
+
+        doc_id = _get_accessible_chunk_image_doc_id(image_id)
+        if not doc_id:
+            logging.warning("get_document_image: access denied for image_id=%s user_id=%s", image_id, current_user.id)
+            return get_data_error_result(message="Image not found.")
+
+        bkt, nm = arr
         data = await thread_pool_exec(settings.STORAGE_IMPL.get, bkt, nm)
         response = await make_response(data)
-        response.headers.set("Content-Type", "image/JPEG")
+        ext = Path(nm).suffix.lower().lstrip(".")
+        response.headers.set("Content-Type", CONTENT_TYPE_MAP.get(ext, "image/jpeg"))
         return response
     except Exception as e:
         return server_error_response(e)
