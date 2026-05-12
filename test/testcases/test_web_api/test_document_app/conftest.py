@@ -79,7 +79,7 @@ def add_documents_func(request, WebApiAuth, add_dataset_func, ragflow_tmp_dir):
 
 
 def _check_duplicate_ids(ids, *_args, **_kwargs):
-    return list(set(ids)), []
+    return list(dict.fromkeys(ids)), []
 
 
 def _stub_document_api_dependencies(monkeypatch, repo_root):
